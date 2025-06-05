@@ -4,8 +4,10 @@ const emojis = require('./emojis');
 const qrcode = require('qrcode-terminal');
 const path = require('path');
 const fs = require('fs');
-var DELAIS = 10000;
-let messageToSaveForTransfer = null;
+const configPath = './config.json';
+
+let DELAIS = 10000;
+let savedMessage = null;
 wwjs.ChatTypes.GROUP
 
 const client = new Client({
@@ -14,8 +16,25 @@ const client = new Client({
     })
 });
 
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log("Le client a démarré 🏎");
+
+    if (fs.existsSync(configPath)) {
+        const data = JSON.parse(fs.readFileSync(configPath));
+        if (data.DELAIS) DELAIS = data.DELAIS;
+        if (data.savedMessageId) {
+            // On récupère le message sauvegardé via son ID après que le client soit prêt
+            try {
+                savedMessage = await client.getMessageById(data.savedMessageId);
+            } catch (error) {
+                console.error('Erreur lors du chargement du message sauvegardé:', error.message);
+            }
+        }
+    }
+    
+
+    console.log("Les configs sont chargés 💾")
+
 });
 
 client.on('qr', (qr) => {
@@ -36,6 +55,7 @@ client.on('message_create', async (message) => {
         if (message.body == ".diffusion") {
             try {
                 const groupChat = await client.getChatById(message.id.remote);
+                
                 if (groupChat.isGroup) { // S'assurer que le message vient d'un groupe pour cette commande
                     await message.reply("Démarrage de la diffusion aux participants de ce groupe. Veuillez patienter...");
                     await sendPrivateMessages(groupChat.participants);
@@ -69,11 +89,11 @@ client.on('message_create', async (message) => {
                 await message.reply("❌ Une erreur est survenue lors de la tentative de diffusion via le message cité. Assurez-vous de répondre à un message de groupe valide.");
             }
         }
-        if(message.body == "save"){
+        if(message.body == ".save"){
             try {
                 const quotedMessage = await message.getQuotedMessage();
                 if (quotedMessage) {
-                    messageToSaveForTransfer = quotedMessage; // Sauvegarde l'objet du message cité
+                    savedMessage = quotedMessage; // Sauvegarde l'objet du message cité
                     await message.reply("Message sauvegardé avec succès pour un transfert futur ! ✅");
                     console.log(`Message sauvegardé: ID ${quotedMessage.id._serialized}`);
                 } else {
@@ -84,6 +104,29 @@ client.on('message_create', async (message) => {
                 await message.reply("❌ Une erreur est survenue lors de la tentative de sauvegarde du message.");
             }
         }
+
+        if (message.body.startsWith(".delais")) {
+            try {
+                const parts = message.body.trim().split(/\s+/);
+                if (parts.length < 2) {
+                    await message.reply("❌ Veuillez spécifier un délai en secondes. Exemple : `.delais 5`");
+                    return;
+                }
+                const seconds = parseInt(parts[1], 10);
+                if (isNaN(seconds) || seconds < 0) {
+                    await message.reply("❌ Le délai doit être un nombre entier positif.");
+                    return;
+                }
+                DELAIS = seconds * 1000; // conversion en millisecondes
+                saveConfig(); // sauvegarde dans le fichier
+                await message.reply(`⏱️ Délai mis à jour à ${seconds} seconde(s).`);
+                console.log(`DELAIS mis à jour : ${DELAIS} ms`);
+            } catch (error) {
+                console.error('Erreur lors de la mise à jour du délai:', error.message);
+                await message.reply("❌ Une erreur est survenue lors de la mise à jour du délai.");
+            }
+        }
+        
         }
     
     else {
@@ -115,6 +158,7 @@ async function sendPrivateMessages(participants) {
         return;
     }
 
+
     for (const participant of participants) {
         try {
             const chat = await client.getChatById(participant.id._serialized);
@@ -140,4 +184,14 @@ async function sendPrivateMessages(participants) {
         }
     }
     console.log(`OPÉRATION DE DIFFUSION TERMINÉE ! Transferts réussis : ${successCount}, Échecs : ${failCount}`);
+}
+
+
+// Fonction pour sauvegarder la config
+function saveConfig() {
+    const data = {
+        DELAIS,
+        savedMessageId: savedMessage ? savedMessage.id._serialized : null
+    };
+    fs.writeFileSync(configPath, JSON.stringify(data, null, 2));
 }
